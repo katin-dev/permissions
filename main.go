@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -15,7 +17,7 @@ import (
   1. [x] Поднять HTTP сервер
   2. [x] Написать обработчик: считывает из запроса UserID, возвращает список строк в виде JSON ответа
   3. Подключить БД и написать запрос для получения permissions
-  4. Написать middleware для преобразования токена в user_id
+  4. [x] Написать middleware для преобразования токена в user_id
 */
 
 var CheckAuth = func(next http.Handler) http.Handler {
@@ -57,9 +59,27 @@ var CheckAuth = func(next http.Handler) http.Handler {
 		fmt.Sprintf("Token %s", tokenPart)
 
 		// Всё прошло хорошо, продолжаем выполнение запроса
+		resp, err := http.PostForm(
+			"http://127.0.0.1:4445/oauth2/introspect",
+			url.Values{"token": {tokenPart}, "scope": {""}},
+		)
+		if err != nil {
+			fmt.Println(err.Error())
+			return
+		}
 
-		// userId := r.URL.Query().Get("user_id")
-		userId := tokenPart
+		defer resp.Body.Close()
+		body, err := ioutil.ReadAll(resp.Body)
+
+		token := make(map[string]string)
+		err = json.Unmarshal(body, &token)
+		if err != nil {
+			fmt.Println(err.Error())
+		}
+
+		fmt.Println(token["sub"])
+
+		userId := token["sub"]
 
 		fmt.Sprintf("User %s", userId) //Полезно для мониторинга
 
@@ -77,7 +97,7 @@ func permissionHandler(w http.ResponseWriter, r *http.Request) {
 	permissions := make([]string, 0)
 	fmt.Println(r.Context().Value("user_id"))
 
-	if r.Context().Value("user_id") == "sergey" {
+	if r.Context().Value("user_id") == "518f2641-ba9a-42d0-82e2-95ef33831d85" {
 		sergeyPermissions := []string{"read", "dance", "play"}
 		permissions = append(permissions, sergeyPermissions...)
 	}
