@@ -8,6 +8,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	"github.com/pkg/errors"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -99,7 +100,6 @@ var CheckAuth = func(next http.Handler) http.Handler {
 
 		userId, err := getUserIdByAccessToken(accessToken)
 		if err != nil {
-			log.Fatal(err)
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -125,6 +125,10 @@ func getUserIdByAccessToken(accessToken string) (string, error) {
 
 	defer resp.Body.Close()
 
+	if resp.StatusCode != 200 {
+		return "", errors.New("Invalid token")
+	}
+
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("Read error: %s", err.Error())
@@ -136,6 +140,10 @@ func getUserIdByAccessToken(accessToken string) (string, error) {
 	if err != nil {
 		log.Printf("Json error: %s", err.Error())
 		return "", err
+	}
+
+	if token["active"] == false {
+		return "", errors.New("Invalid token (is not active)")
 	}
 
 	return token["sub"].(string), nil
