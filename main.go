@@ -1,20 +1,15 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
+	"log"
+	"net/http"
+	"os"
+
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
-	"github.com/pkg/errors"
-	"io/ioutil"
-	"log"
-	"net/http"
-	"net/url"
-	"os"
-	"strings"
 )
 
 /*
@@ -28,6 +23,7 @@ import (
 */
 
 var db *sql.DB
+var h *hydra
 
 func init() {
 	var err error
@@ -48,135 +44,24 @@ func init() {
 	if err = db.Ping(); err != nil {
 		log.Fatal(err)
 	}
+
+	hydraUrl := os.Getenv("HYDRA_URL")
+
+	h = NewHydra(hydraUrl)
 }
 
 func main() {
 	router := mux.NewRouter()
-	router.Use(CheckAuth)
+
+	router.Use(AuthorizeRequest)
+
 	router.HandleFunc("/api/v1/user/permissions", permissionHandler)
 
 	err := http.ListenAndServe(":8085", router)
 
 	if err != nil {
-		fmt.Print(err)
+		log.Fatal(err)
 	}
-}
-
-var CheckAuth = func(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
-		notAuth := []string{"/api/user/new", "/api/user/login"} //Список эндпоинтов, для которых не требуется авторизация
-		requestPath := r.URL.Path                               //текущий путь запроса
-
-		//проверяем, не требует ли запрос аутентификации, обслуживаем запрос, если он не нужен
-		for _, value := range notAuth {
-
-			if value == requestPath {
-				next.ServeHTTP(w, r)
-				return
-			}
-		}
-
-		tokenHeader := r.Header.Get("Authorization") //Получение токена
-
-		if tokenHeader == "" { //Токен отсутствует, возвращаем  403 http-код Unauthorized
-			w.WriteHeader(http.StatusForbidden)
-			w.Header().Add("Content-Type", "application/json")
-			w.Write([]byte("require authorization"))
-			return
-		}
-
-		splitted := strings.Split(tokenHeader, " ")
-		if len(splitted) != 2 {
-			w.WriteHeader(http.StatusForbidden)
-			w.Header().Add("Content-Type", "application/json")
-			w.Write([]byte("invalid access token"))
-			return
-		}
-
-		accessToken := splitted[1]
-
-		fmt.Println(accessToken)
-
-		userId, err := getUserIdByAccessToken(accessToken)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-
-		fmt.Println(userId)
-
-		ctx := context.WithValue(r.Context(), "user_id", userId)
-		r = r.WithContext(ctx)
-		next.ServeHTTP(w, r) //передать управление следующему обработчику!
-	})
-}
-
-func getUserIdByAccessToken(accessToken string) (string, error) {
-	hydraUrl := "http://127.0.0.1:4445/oauth2/introspect"
-	resp, err := http.PostForm(
-		hydraUrl,
-		url.Values{"token": {accessToken}, "scope": {""}},
-	)
-	if err != nil {
-		fmt.Println(err.Error())
-		return "", err
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return "", errors.New("Invalid token")
-	}
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("Read error: %s", err.Error())
-		return "", err
-	}
-
-	token := make(map[string]interface{})
-	err = json.Unmarshal(body, &token)
-	if err != nil {
-		log.Printf("Json error: %s", err.Error())
-		return "", err
-	}
-
-	if token["active"] == false {
-		return "", errors.New("Invalid token (is not active)")
-	}
-
-	return token["sub"].(string), nil
-}
-
-func getUserPermissions(userId string) ([]string, error) {
-	rows, err := db.Query(`
-		SELECT p.name 
-		FROM permission p
-		JOIN role_permission rp ON rp.permission_id = p.id
-		JOIN user_role ur ON ur.role_id = rp.role_id
-		WHERE ur.user_id = $1 	
-	`, userId)
-
-	if err != nil {
-		log.Println("DB error: " + err.Error())
-	}
-
-	defer rows.Close()
-
-	permissions := make([]string, 0)
-
-	for rows.Next() {
-		permission := ""
-		rows.Scan(&permission)
-		permissions = append(permissions, permission)
-	}
-
-	if err = rows.Err(); err != nil {
-		return nil, error(err)
-	}
-
-	return permissions, nil
 }
 
 func permissionHandler(w http.ResponseWriter, r *http.Request) {
